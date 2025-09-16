@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>로스터 - Raid Starter Kit</title>
+  <link rel="stylesheet" href="../styles/base.css">
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <div class="row" style="justify-content: space-between;">
+        <div>
+          <h1 style="margin: 0; font-size: 24px;">📋 캐릭터 로스터</h1>
+        </div>
+        <div class="row">
+          <a href="character.html" class="btn primary">캐릭터 추가</a>
+          <button id="exportAllChars" class="btn">캐릭터 내보내기(전체)</button>
+          <button id="exportPrompts" class="btn">프롬프트 내보내기</button>
+          <button id="importChars" class="btn">캐릭터 가져오기</button>
+          <button id="importPrompts" class="btn">프롬프트 가져오기</button>
+          <a href="lobby.html" class="btn">로비</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div id="list" class="grid" style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px;"></div>
+  </div>
+
+  <script type="module">
+    import { Store } from '../core/store.js';
+
+    const list = document.getElementById('list');
+
+    function render() {
+      const roster = Store.state.roster;
+      
+      if (roster.length === 0) {
+        list.innerHTML = `
+          <div class="card" style="grid-column: 1 / -1; text-align: center; padding: 40px;">
+            <h3>캐릭터가 없습니다</h3>
+            <p class="meta">새로운 캐릭터를 생성해보세요!</p>
+            <a href="character.html" class="btn primary" style="margin-top: 16px;">캐릭터 생성</a>
+          </div>
+        `;
+        return;
+      }
+
+      list.innerHTML = roster.map(char => `
+        <div class="card">
+          <div style="width: 100%; aspect-ratio: 1/1; overflow: hidden; border-radius: 8px; background: #f6f6f6; margin-bottom: 12px;">
+            ${char.image ? 
+              `<img src="${char.image}" style="width: 100%; height: 100%; object-fit: cover;">` : 
+              '<div style="display: grid; place-items: center; height: 100%; color: var(--muted);">No Image</div>'
+            }
+          </div>
+          
+          <h4 style="margin: 0 0 4px 0;">${char.name}</h4>
+          <div class="meta" style="margin-bottom: 8px;">${char.title || '칭호 없음'}</div>
+          
+          ${char.desc ? `<div class="meta" style="margin-bottom: 8px;">${char.desc}</div>` : ''}
+          
+          ${char.abilities && char.abilities.length > 0 ? `
+            <details>
+              <summary>스킬 (${char.abilities.length}개)</summary>
+              <div class="meta" style="margin-top: 8px;">
+                ${char.abilities.map(ability => 
+                  `<div style="margin-bottom: 4px;">
+                    <strong>${ability.name}</strong><br>
+                    <span style="font-size: 11px;">${ability.text}</span>
+                  </div>`
+                ).join('')}
+              </div>
+            </details>
+          ` : ''}
+          
+          <div class="row" style="margin-top: 12px; justify-content: flex-end; gap:6px;">
+            <button class="btn" onclick="exportChar('${char.id}')">내보내기</button>
+            <button class="btn danger" onclick="removeChar('${char.id}')">삭제</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // 캐릭터 삭제 함수 (전역으로 등록)
+    window.removeChar = function(id) {
+      if (confirm('이 캐릭터를 삭제하시겠습니까?')) {
+        Store.removeChar(id);
+        render();
+      }
+    };
+
+    async function urlToDataUrl(url) {
+      if (!url) return '';
+      try {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result || '');
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        console.warn('이미지 변환 실패:', e);
+        return '';
+      }
+    }
+
+    async function buildCharExport(char) {
+      const imageData = await urlToDataUrl(char.image);
+      return {
+        type: 'rsk-character',
+        version: 1,
+        id: char.id,
+        name: char.name,
+        title: char.title,
+        desc: char.desc,
+        imageData,
+        abilities: (char.abilities || []).map(a => ({ name: a.name, text: a.text }))
+      };
+    }
+
+    function downloadJson(obj, filename) {
+      const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    window.exportChar = async function(id) {
+      const char = Store.state.roster.find(c => c.id === id);
+      if (!char) return;
+      const payload = await buildCharExport(char);
+      downloadJson(payload, `${char.name||'character'}.rsk-char.json`);
+    };
+
+    document.getElementById('exportAllChars').addEventListener('click', async () => {
+      const listPayload = [];
+      for (const c of Store.state.roster) {
+        listPayload.push(await buildCharExport(c));
+      }
+      downloadJson({ type: 'rsk-characters', version: 1, items: listPayload }, 'characters.rsk.json');
+    });
+
+    document.getElementById('exportPrompts').addEventListener('click', () => {
+      try {
+        const prompts = Store.loadPrompts();
+        downloadJson({ type: 'rsk-prompts', version: 1, items: prompts }, 'prompts.rsk.json');
+      } catch (e) {
+        alert('프롬프트 내보내기 실패: '+e.message);
+      }
+    });
+
+    // 파일 선택 유틸
+    function chooseFile(accept) {
+      return new Promise((resolve) => {
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = accept || 'application/json';
+        inp.onchange = () => resolve(inp.files?.[0] || null);
+        inp.click();
+      });
+    }
+
+    function readFileText(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result||''));
+        r.onerror = reject;
+        r.readAsText(file, 'utf-8');
+      });
+    }
+
+    // 캐릭터 가져오기
+    document.getElementById('importChars').addEventListener('click', async () => {
+      try {
+        const file = await chooseFile('.json');
+        if (!file) return;
+        const text = await readFileText(file);
+        const data = JSON.parse(text);
+        let items = [];
+        if (data?.type === 'rsk-character') {
+          items = [data];
+        } else if (data?.type === 'rsk-characters' && Array.isArray(data.items)) {
+          items = data.items;
+        } else {
+          alert('알 수 없는 캐릭터 파일 형식입니다');
+          return;
+        }
+        let added = 0;
+        for (const it of items) {
+          const image = it.imageData || '';
+          const id = 'char-'+(crypto.randomUUID?.()||Date.now()+Math.random());
+          const character = {
+            id,
+            name: it.name||'Unknown',
+            title: it.title||'',
+            desc: it.desc||'',
+            image,
+            abilities: (it.abilities||[]).map(a=>({name: a.name||'', text: a.text||''}))
+          };
+          Store.addChar(character);
+          added++;
+        }
+        alert(`캐릭터 ${added}개를 가져왔습니다`);
+        render();
+      } catch (e) {
+        alert('가져오기 실패: '+e.message);
+      }
+    });
+
+    // 프롬프트 가져오기
+    document.getElementById('importPrompts').addEventListener('click', async () => {
+      try {
+        const file = await chooseFile('.json');
+        if (!file) return;
+        const text = await readFileText(file);
+        const data = JSON.parse(text);
+        let items = [];
+        if (data?.type === 'rsk-prompts' && Array.isArray(data.items)) {
+          items = data.items;
+        } else if (Array.isArray(data)) {
+          items = data;
+        } else {
+          alert('알 수 없는 프롬프트 파일 형식입니다');
+          return;
+        }
+        const existing = Store.loadPrompts();
+        for (const p of items) {
+          const id = p.id && !existing.find(x=>x.id===p.id) ? p.id : ('p-'+(crypto.randomUUID?.()||Date.now()+Math.random()));
+          existing.push({ id, label: p.label||p.id||'프롬프트', text: p.text||'' });
+        }
+        Store.savePrompts(existing);
+        alert(`프롬프트 ${items.length}개를 가져왔습니다`);
+      } catch (e) {
+        alert('프롬프트 가져오기 실패: '+e.message);
+      }
+    });
+
+    // 초기 렌더링
+    render();
+  </script>
+</body>
+</html>
